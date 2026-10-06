@@ -253,3 +253,65 @@ studies, pricing, team, verified technology stack, and company FAQs. The AI
 engine, UI, agent, RAG, brief, and lead flows are complete and implementation-
 ready. Seed the Knowledge Base with verified data and the concierge grounds
 itself — it will never invent facts in the meantime.
+
+## 14. Security model — anonymous session ownership
+
+The module stays guest-first (no login/signup), but ownership is enforced
+server-side:
+
+- **First Fartak request** mints a 256-bit random token in an **HttpOnly,
+  SameSite=Lax, Secure-in-production, Path=/** cookie (`fartak_session`,
+  30-day expiry). Only its SHA-256 hash is stored — on `Conversation`
+  (`ownerTokenHash`) and never exposed to JavaScript.
+- **Ownership chain:** session cookie → `Conversation` → `ProjectBrief`
+  (`brief.conversationId`) → `Lead`. Client-supplied IDs are identifiers, not
+  proof; foreign/unknown resources return the same generic `404`.
+- **Confirmation is server-authoritative:** only `draft → confirmed` via
+  `POST /api/fartak/brief`; `status`/`confirmedAt` are generated server-side
+  and all brief edits pass a strict allow-list with size caps. There is no
+  public read endpoint for briefs.
+- **Single idempotent handoff:** `Lead.conversationId` is `@unique` plus an
+  optional `X-Fartak-Idempotency-Key` header — retries and double-clicks
+  return the existing result. `projectReference` is always server-generated.
+- **CSRF:** SameSite=Lax cookie + same-origin check on state-changing POSTs.
+- **Rate limiting** is in-memory per instance — replace with shared
+  infrastructure (Redis/Upstash) for multi-instance production deployments.
+
+To integrate: nothing extra to configure — the cookie flows automatically with
+the module's same-origin `fetch` calls (`credentials: "same-origin"`).
+
+Regression tests for this model live outside the module (development harness
+at the repository root): `tests/security-matrix.ts` (`npm run test:security`).
+
+## 15. Project Brief lifecycle (server-authoritative state machine)
+
+One conversation has exactly ONE authoritative Project Brief
+(`ProjectBrief.conversationId @unique`; `Conversation.briefId` points at it and
+is set atomically with the first brief). All transitions live in a single
+module — `server/fartak/briefLifecycle.ts` — used by the AI tool, the API
+routes, and the confirmation flow alike:
+
+```
+draft → review → confirmed → locked
+```
+
+- **draft → review** — automatic once the brief carries enough meaningful
+  content (deterministic server readiness check: project idea, problem, goal,
+  core features). Optional gaps (budget/timeline/platform/…) never block.
+- **review/draft → confirmed** — only via explicit user confirmation
+  (`POST /api/fartak/brief`); `status` and `confirmedAt` are generated
+  server-side and never accepted from the client. Repeating an identical
+  confirmation is idempotent.
+- **confirmed → review/draft** — any content edit to a confirmed brief
+  INVALIDATES the confirmation (`confirmedAt` cleared) and requires a new
+  explicit confirmation before the contact form can hand off.
+- **confirmed → locked** — on successful Lead handoff, brief lock, Lead row and
+  conversation completion commit in ONE transaction. A locked brief is
+  immutable: every edit/confirmation attempt returns `409`.
+- Assumptions and open questions are reconciled on every update: answering a
+  field removes the matching assumption/question, and an assumption that
+  duplicates a confirmed requirement is dropped.
+
+Concurrency-safe: first-brief creation is arbitrated by the unique constraint,
+updates use optimistic `updatedAt` guards, and confirmation/handoff are atomic.
+Regression tests: `tests/lifecycle-matrix.ts` (`npm run test:lifecycle`).

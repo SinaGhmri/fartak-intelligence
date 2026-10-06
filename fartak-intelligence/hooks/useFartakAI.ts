@@ -20,6 +20,14 @@ import type {
 let idCounter = 0;
 const uid = () => `m${Date.now()}_${idCounter++}`;
 
+// One idempotency key per contact-form attempt (stable across retries and
+// double-clicks of the same submission). Not a secret — just a duplicate
+// marker; server-side ownership comes from the session cookie.
+const newIdempotencyKey = (): string =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
 export interface UseFartakAIOptions {
   // Fired after the server completes the project handoff.
   onLeadSubmitted?: (leadId: string, reference: string) => void;
@@ -45,6 +53,7 @@ export function useFartakAI(options: UseFartakAIOptions = {}) {
   const streamTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedRef = useRef(false);
   const discoveryStartedRef = useRef(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   useEffect(
     () => () => {
@@ -81,6 +90,7 @@ export function useFartakAI(options: UseFartakAIOptions = {}) {
     setHandoff(null);
     startedRef.current = false;
     discoveryStartedRef.current = false;
+    idempotencyKeyRef.current = null;
   }, []);
 
   const phase: FartakPhase = messages.length === 0 ? "welcome" : "conversation";
@@ -223,6 +233,11 @@ export function useFartakAI(options: UseFartakAIOptions = {}) {
   const submitLead = useCallback(
     async (leadData: LeadData) => {
       try {
+        // Stable per form attempt: retries/double-clicks repeat the same key
+        // so the server can collapse duplicates (alongside its unique
+        // conversation constraint). The ownership session itself is handled
+        // automatically via the HttpOnly cookie — never by this hook.
+        if (!idempotencyKeyRef.current) idempotencyKeyRef.current = newIdempotencyKey();
         const payload: LeadRequest = {
           conversationId: conversationId as string,
           name: leadData.name,
@@ -231,6 +246,7 @@ export function useFartakAI(options: UseFartakAIOptions = {}) {
           preferredContactMethod: leadData.preferredContactMethod,
           briefId: brief?.id ?? null,
           briefUpdates: briefEdits,
+          idempotencyKey: idempotencyKeyRef.current,
         };
         const data = await fartakLead(payload);
         if (data.ok) {

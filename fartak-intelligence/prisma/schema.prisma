@@ -11,16 +11,20 @@ datasource db {
 }
 
 model Conversation {
-  id           String   @id @default(cuid())
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  status       String   @default("active") // active | completed | abandoned
-  intent       String?
-  title        String?
-  messageCount Int      @default(0)
-  summary      String? // AI-generated conversation summary for the handoff
-  briefId      String? // latest ProjectBrief id (scalar pointer)
-  leadId       String? // latest Lead id (scalar pointer)
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  status         String   @default("active") // active | completed | abandoned — server-set only, never from the client
+  intent         String?
+  title          String?
+  messageCount   Int      @default(0)
+  summary        String? // AI-generated conversation summary for the handoff
+  briefId        String? // latest ProjectBrief id (scalar pointer)
+  leadId         String? // latest Lead id (scalar pointer)
+  // SHA-256 of the HttpOnly anonymous-session cookie that owns this
+  // conversation. Proof of ownership is the cookie token, never the id.
+  ownerTokenHash String?
+  @@index([ownerTokenHash])
 }
 
 model Message {
@@ -33,6 +37,7 @@ model Message {
   toolArgs       String? // JSON-stringified tool arguments
   toolResult     String? // JSON-stringified tool results
   cards          String? // JSON-stringified UI actions attached to the message
+  @@index([conversationId])
 }
 
 model KnowledgeEntry {
@@ -51,7 +56,9 @@ model ProjectBrief {
   id              String    @id @default(cuid())
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
-  conversationId  String
+  // ONE authoritative brief per conversation, enforced by the database:
+  // repeated AI extractions update this row instead of creating duplicates.
+  conversationId  String    @unique
   projectName     String?
   projectType     String?
   problem         String?
@@ -75,14 +82,22 @@ model ProjectBrief {
   securityPrivacy String?
   additionalNotes String?
   readiness       String? // JSON-stringified internal readiness evaluation
-  status          String    @default("draft") // draft | confirmed
-  confirmedAt     DateTime?
+  status          String    @default("draft") // draft | review | confirmed | locked — server-authoritative transitions only
+  confirmedAt     DateTime? // set by the server at confirmation, cleared when a confirmed brief is edited
 }
 
 model Lead {
   id                    String   @id @default(cuid())
   createdAt             DateTime @default(now())
-  conversationId        String
+  // Hard guarantee of at most one handoff per conversation (double-clicks,
+  // browser/network retries, concurrent requests all collapse to one row).
+  // NOTE: deduplicate any pre-existing rows with more than one lead per
+  // conversation before running this migration.
+  conversationId        String   @unique
+  // Optional client X-Fartak-Idempotency-Key — duplicate-request protection
+  // ONLY. It is never treated as authentication; ownership comes from the
+  // anonymous session cookie.
+  idempotencyKey        String?  @unique
   projectBriefId        String?
   projectReference      String   @unique // human-readable handoff reference, e.g. FTK-2048
   name                  String

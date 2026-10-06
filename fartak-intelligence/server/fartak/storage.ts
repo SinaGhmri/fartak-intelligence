@@ -1,17 +1,24 @@
 // Data access layer (Prisma). The rest of the server code only uses these
 // functions — swapping the database means rewriting this one file.
 
-import { PrismaClient } from "@prisma/client";
-import type {
-  KnowledgeCard,
-  ProjectBrief,
-  ProjectBriefEdits,
-  ReadinessState,
+import { randomInt } from "node:crypto";
+import { Prisma, PrismaClient } from "@prisma/client";
+import {
+  isBriefStatus,
+  type BriefStatus,
+  type KnowledgeCard,
+  type ProjectBrief,
+  type ProjectBriefEdits,
+  type ReadinessState,
 } from "../../lib/fartak/types";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 export const prisma = globalForPrisma.prisma || new PrismaClient();
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+// Plain client or an open transaction — brief lifecycle helpers accept both
+// so multi-record operations can run atomically.
+export type Db = PrismaClient | Prisma.TransactionClient;
 
 // ── Conversations ──────────────────────────────────────────────────────────
 
@@ -19,10 +26,39 @@ export async function getConversation(id: string) {
   return prisma.conversation.findUnique({ where: { id } });
 }
 
-export async function createConversation(data: { intent?: string; title: string }) {
+export async function createConversation(data: {
+  intent?: string;
+  title: string;
+  ownerTokenHash: string;
+}) {
   return prisma.conversation.create({
-    data: { status: "active", intent: data.intent || "", title: data.title.slice(0, 60) },
+    data: {
+      status: "active",
+      intent: data.intent || "",
+      title: data.title.slice(0, 60),
+      ownerTokenHash: data.ownerTokenHash,
+    },
   });
+}
+
+// Ownership check: an id alone is never proof of ownership — the conversation
+// must carry the SHA-256 hash of the caller's anonymous session cookie.
+// Unknown ids and foreign conversations are indistinguishable to the caller
+// (both return null → the route replies with the same generic error).
+export async function getConversationForOwner(id: string, ownerTokenHash: string) {
+  if (!id || !ownerTokenHash) return null;
+  const conversation = await prisma.conversation.findUnique({ where: { id } }).catch(() => null);
+  if (!conversation) return null;
+  if (conversation.ownerTokenHash === ownerTokenHash) return conversation;
+  if (conversation.ownerTokenHash) return null; // owned by a different session
+  // Migration path only: rows created before ownership tracking have no hash.
+  // Claim atomically — the first session to present the id adopts it, every
+  // other session is rejected. Conversations created after this phase always
+  // get a hash at creation, so this branch never applies to new data.
+  const claimed = await prisma.conversation
+    .updateMany({ where: { id, ownerTokenHash: null }, data: { ownerTokenHash } })
+    .catch(() => null);
+  return claimed && claimed.count === 1 ? { ...conversation, ownerTokenHash } : null;
 }
 
 export async function updateConversation(
@@ -101,84 +137,118 @@ export function toKnowledgeCard(e: {
   };
 }
 
-// ── Project briefs ─────────────────────────────────────────────────────────
+// ── Project briefs ──────────────────────────────────────────────────────────
+// Storage only stores/reads brief rows here. Lifecycle rules (state
+// transitions, readiness, reconciliation) live in briefLifecycle.ts — the
+// single authority applied by every update path.
 
-export async function createBrief(
+/** Plain column values for brief content (assignable to both Prisma create
+ * and update inputs — no update-ops wrapper types). */
+export interface BriefContentData {
+  projectName?: string | null;
+  projectType?: string | null;
+  problem?: string | null;
+  goal?: string | null;
+  targetUsers?: string | null;
+  userRoles?: string | null;
+  platform?: string | null;
+  features?: string[];
+  workflows?: string | null;
+  aiRequirements?: string | null;
+  integrations?: string | null;
+  constraints?: string | null;
+  mvpScope?: string | null;
+  futureScope?: string | null;
+  assumptions?: string[];
+  openQuestions?: string[];
+  timeline?: string | null;
+  budget?: string | null;
+  geographicScope?: string | null;
+  languages?: string | null;
+  securityPrivacy?: string | null;
+  additionalNotes?: string | null;
+}
+
+/** Map sanitized editable fields to their Prisma column names (omitted keys
+ * are simply not written). Server-owned columns are never represented. */
+export function toBriefRowData(edits: ProjectBriefEdits): BriefContentData {
+  return {
+    ...(edits.project_name !== undefined && { projectName: edits.project_name || null }),
+    ...(edits.project_type !== undefined && { projectType: edits.project_type || null }),
+    ...(edits.problem !== undefined && { problem: edits.problem || null }),
+    ...(edits.goal !== undefined && { goal: edits.goal || null }),
+    ...(edits.target_users !== undefined && { targetUsers: edits.target_users || null }),
+    ...(edits.user_roles !== undefined && { userRoles: edits.user_roles || null }),
+    ...(edits.platform !== undefined && { platform: edits.platform || null }),
+    ...(edits.features !== undefined && { features: edits.features }),
+    ...(edits.workflows !== undefined && { workflows: edits.workflows || null }),
+    ...(edits.ai_requirements !== undefined && { aiRequirements: edits.ai_requirements || null }),
+    ...(edits.integrations !== undefined && { integrations: edits.integrations || null }),
+    ...(edits.constraints !== undefined && { constraints: edits.constraints || null }),
+    ...(edits.mvp_scope !== undefined && { mvpScope: edits.mvp_scope || null }),
+    ...(edits.future_scope !== undefined && { futureScope: edits.future_scope || null }),
+    ...(edits.assumptions !== undefined && { assumptions: edits.assumptions }),
+    ...(edits.open_questions !== undefined && { openQuestions: edits.open_questions }),
+    ...(edits.timeline !== undefined && { timeline: edits.timeline || null }),
+    ...(edits.budget !== undefined && { budget: edits.budget || null }),
+    ...(edits.geographic_scope !== undefined && { geographicScope: edits.geographic_scope || null }),
+    ...(edits.languages !== undefined && { languages: edits.languages || null }),
+    ...(edits.security_privacy !== undefined && { securityPrivacy: edits.security_privacy || null }),
+    ...(edits.additional_notes !== undefined && { additionalNotes: edits.additional_notes || null }),
+  };
+}
+
+export async function getBriefRecord(id: string, db: Db = prisma): Promise<BriefRecord | null> {
+  if (!id) return null;
+  return db.projectBrief.findUnique({ where: { id } });
+}
+
+export async function findBriefRecordByConversation(
   conversationId: string,
-  brief: ProjectBriefEdits,
-  readiness?: ReadinessState | null
-) {
-  const record = await prisma.projectBrief.create({
+  db: Db = prisma
+): Promise<BriefRecord | null> {
+  if (!conversationId) return null;
+  return db.projectBrief.findFirst({ where: { conversationId }, orderBy: { createdAt: "asc" } });
+}
+
+/** Insert the first brief of a conversation (caller runs this inside a
+ * transaction together with the Conversation.briefId pointer assignment). */
+export async function insertBriefRow(
+  data: { conversationId: string; edits: ProjectBriefEdits; status: BriefStatus; readiness: string | null },
+  db: Db = prisma
+): Promise<BriefRecord> {
+  return db.projectBrief.create({
     data: {
-      conversationId,
-      projectName: brief.project_name || null,
-      projectType: brief.project_type || null,
-      problem: brief.problem || null,
-      goal: brief.goal || null,
-      targetUsers: brief.target_users || null,
-      userRoles: brief.user_roles || null,
-      platform: brief.platform || null,
-      features: brief.features || [],
-      workflows: brief.workflows || null,
-      aiRequirements: brief.ai_requirements || null,
-      integrations: brief.integrations || null,
-      constraints: brief.constraints || null,
-      mvpScope: brief.mvp_scope || null,
-      futureScope: brief.future_scope || null,
-      assumptions: brief.assumptions || [],
-      openQuestions: brief.open_questions || [],
-      timeline: brief.timeline || null,
-      budget: brief.budget || null,
-      geographicScope: brief.geographic_scope || null,
-      languages: brief.languages || null,
-      securityPrivacy: brief.security_privacy || null,
-      additionalNotes: brief.additional_notes || null,
-      readiness: readiness ? JSON.stringify(readiness) : null,
-      status: "draft",
+      ...toBriefRowData(data.edits),
+      conversationId: data.conversationId,
+      status: data.status,
+      confirmedAt: null,
+      readiness: data.readiness,
     },
   });
-  await updateConversation(conversationId, { briefId: record.id });
-  return toWireBrief(record);
 }
 
-export async function updateBrief(id: string, edits: ProjectBriefEdits, confirmed = false) {
-  const record = await prisma.projectBrief
-    .update({
-      where: { id },
-      // Inline conditional spreads keep the object assignable to Prisma's
-      // generated update-input type; omitted keys are simply not updated.
-      data: {
-        ...(edits.project_name !== undefined && { projectName: edits.project_name }),
-        ...(edits.project_type !== undefined && { projectType: edits.project_type }),
-        ...(edits.problem !== undefined && { problem: edits.problem }),
-        ...(edits.goal !== undefined && { goal: edits.goal }),
-        ...(edits.target_users !== undefined && { targetUsers: edits.target_users }),
-        ...(edits.user_roles !== undefined && { userRoles: edits.user_roles }),
-        ...(edits.platform !== undefined && { platform: edits.platform }),
-        ...(edits.features !== undefined && { features: edits.features }),
-        ...(edits.workflows !== undefined && { workflows: edits.workflows }),
-        ...(edits.ai_requirements !== undefined && { aiRequirements: edits.ai_requirements }),
-        ...(edits.integrations !== undefined && { integrations: edits.integrations }),
-        ...(edits.constraints !== undefined && { constraints: edits.constraints }),
-        ...(edits.mvp_scope !== undefined && { mvpScope: edits.mvp_scope }),
-        ...(edits.future_scope !== undefined && { futureScope: edits.future_scope }),
-        ...(edits.assumptions !== undefined && { assumptions: edits.assumptions }),
-        ...(edits.open_questions !== undefined && { openQuestions: edits.open_questions }),
-        ...(edits.timeline !== undefined && { timeline: edits.timeline }),
-        ...(edits.budget !== undefined && { budget: edits.budget }),
-        ...(edits.geographic_scope !== undefined && { geographicScope: edits.geographic_scope }),
-        ...(edits.languages !== undefined && { languages: edits.languages }),
-        ...(edits.security_privacy !== undefined && { securityPrivacy: edits.security_privacy }),
-        ...(edits.additional_notes !== undefined && { additionalNotes: edits.additional_notes }),
-        ...(confirmed && { status: "confirmed", confirmedAt: new Date() }),
-      },
-    })
-    .catch(() => null);
-  return record ? toWireBrief(record) : null;
+/**
+ * Optimistically-conditional update: when `updatedAt` is provided, the write
+ * only applies if the row was not modified since it was read (concurrency
+ * control). Returns the number of rows actually updated (0 = stale/locked).
+ */
+export async function updateBriefRow(
+  where: { id: string; updatedAt?: Date },
+  data: Prisma.ProjectBriefUpdateManyMutationInput,
+  db: Db = prisma
+): Promise<number> {
+  const res = await db.projectBrief.updateMany({
+    where: { id: where.id, ...(where.updatedAt ? { updatedAt: where.updatedAt } : {}) },
+    data,
+  });
+  return res.count;
 }
 
-type BriefRecord = {
+export type BriefRecord = {
   id: string;
+  createdAt: Date;
+  updatedAt: Date;
   conversationId: string;
   projectName: string | null;
   projectType: string | null;
@@ -204,6 +274,7 @@ type BriefRecord = {
   additionalNotes: string | null;
   readiness: string | null;
   status: string;
+  confirmedAt: Date | null;
 };
 
 export function toWireBrief(b: BriefRecord): ProjectBrief {
@@ -233,7 +304,7 @@ export function toWireBrief(b: BriefRecord): ProjectBrief {
     security_privacy: b.securityPrivacy || undefined,
     additional_notes: b.additionalNotes || undefined,
     readiness: parseReadiness(b.readiness),
-    status: b.status === "confirmed" ? "confirmed" : "draft",
+    status: isBriefStatus(b.status) ? b.status : "draft",
   };
 }
 
@@ -259,10 +330,12 @@ export async function getBrief(id: string) {
 // ── Leads ──────────────────────────────────────────────────────────────────
 
 // Human-readable project reference, e.g. FTK-2048. Generated server-side
-// at handoff and unique across all leads.
+// at handoff; the client can never choose it. Randomness comes from Node's
+// CSPRNG, but the @unique constraint on projectReference remains the final
+// authority — callers retry on collision.
 export async function generateProjectReference(prefix = "FTK"): Promise<string> {
   for (let i = 0; i < 25; i++) {
-    const ref = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const ref = `${prefix}-${1000 + randomInt(9000)}`;
     const existing = await prisma.lead
       .findUnique({ where: { projectReference: ref } })
       .catch(() => null);
@@ -271,28 +344,18 @@ export async function generateProjectReference(prefix = "FTK"): Promise<string> 
   return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
 }
 
-export async function createLead(data: {
-  conversationId: string;
-  projectBriefId?: string | null;
-  projectReference: string;
-  name: string;
-  phone: string;
-  email?: string | null;
-  preferredContactMethod: string;
-}) {
-  return prisma.lead.create({
-    data: {
-      conversationId: data.conversationId,
-      projectBriefId: data.projectBriefId || null,
-      projectReference: data.projectReference,
-      name: data.name,
-      phone: data.phone,
-      email: data.email || null,
-      preferredContactMethod: data.preferredContactMethod,
-      status: "new",
-    },
-  });
+// Earliest lead for a conversation (the canonical one under the @unique
+// constraint). findFirst keeps this working even before the unique index
+// exists and avoids leaking anything through error codes.
+export async function findLeadByConversation(conversationId: string) {
+  if (!conversationId) return null;
+  return prisma.lead
+    .findFirst({ where: { conversationId }, orderBy: { createdAt: "asc" } })
+    .catch(() => null);
 }
+
+// Lead CREATION lives in briefLifecycle.finalizeHandoff() so that the Lead
+// row, the brief LOCK, and the conversation completion commit atomically.
 
 export async function getLead(id: string) {
   return prisma.lead.findUnique({ where: { id } }).catch(() => null);

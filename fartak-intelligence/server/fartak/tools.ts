@@ -5,8 +5,9 @@
 
 import { serverConfig } from "./config";
 import { retrieveKnowledge, listByCategory, getByRefId } from "./knowledge";
-import { createBrief, toKnowledgeCard } from "./storage";
-import type { KnowledgeCard, ProjectBrief, ProjectBriefEdits, ReadinessState } from "../../lib/fartak/types";
+import { applyProjectBriefUpdate } from "./briefLifecycle";
+import { toKnowledgeCard } from "./storage";
+import type { KnowledgeCard, ProjectBrief, ProjectBriefEdits } from "../../lib/fartak/types";
 
 // Approved navigation targets — the real sections of the host website.
 export const NAV_TARGETS = serverConfig.navTargets;
@@ -82,8 +83,7 @@ export async function showService(id: unknown): Promise<ShowResult> {
 
 export async function createProjectBrief(
   data: Record<string, unknown>,
-  conversationId: string,
-  readiness?: ReadinessState | null
+  conversationId: string
 ): Promise<{ brief: ProjectBrief }> {
   const edits: ProjectBriefEdits = {
     project_name: asString(data.project_name, 200),
@@ -109,7 +109,10 @@ export async function createProjectBrief(
     security_privacy: asString(data.security_privacy, 1000),
     additional_notes: asString(data.additional_notes, 1000),
   };
-  const brief = await createBrief(conversationId, edits, readiness);
+  // The AI may only propose CONTENT. The lifecycle module creates the first
+  // brief atomically or updates the existing authoritative one — status,
+  // readiness, confirmedAt and lock state are never the model's decision.
+  const brief = await applyProjectBriefUpdate({ conversationId, edits });
   return { brief };
 }
 

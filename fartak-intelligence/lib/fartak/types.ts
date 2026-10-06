@@ -44,6 +44,27 @@ export interface ReadinessState {
   missingOptional: string[];
 }
 
+// Brief lifecycle states — ONE centralized representation, used by the wire
+// type, the server state machine, and storage mapping. String-based on
+// purpose: portable across databases (no Prisma enums).
+export const BRIEF_STATUS = {
+  DRAFT: "draft",
+  REVIEW: "review",
+  CONFIRMED: "confirmed",
+  LOCKED: "locked",
+} as const;
+
+export type BriefStatus = (typeof BRIEF_STATUS)[keyof typeof BRIEF_STATUS];
+
+export function isBriefStatus(value: unknown): value is BriefStatus {
+  return (
+    value === BRIEF_STATUS.DRAFT ||
+    value === BRIEF_STATUS.REVIEW ||
+    value === BRIEF_STATUS.CONFIRMED ||
+    value === BRIEF_STATUS.LOCKED
+  );
+}
+
 // Structured project brief. All fields except features are optional — the AI
 // populates only what the visitor actually told it.
 export interface ProjectBrief {
@@ -72,7 +93,7 @@ export interface ProjectBrief {
   security_privacy?: string;
   additional_notes?: string;
   readiness?: ReadinessState;
-  status: "draft" | "confirmed";
+  status: BriefStatus;
 }
 
 // Editable fields on the brief (used by the review UI, confirmation, and lead

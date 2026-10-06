@@ -1,50 +1,93 @@
 // POST /api/fartak/brief — explicit final confirmation of the Project Brief.
-// The project is never handed off automatically: the lead/contact flow only
-// unlocks after this endpoint confirms the visitor's (optionally edited)
-// brief. Server-side validated; edits are applied and the brief is marked
-// confirmed with a timestamp.
+//
+// Authorization chain (server-enforced): anonymous session cookie →
+// conversation ownership → brief.conversationId match. The briefId is only
+// an identifier; it is never proof of ownership, and a foreign or unknown
+// brief yields the same generic 404.
+//
+// Server-authoritative transition: draft → confirmed. `status` and
+// `confirmedAt` are generated here; nothing the client sends can set them,
+// and an already-confirmed brief is returned as-is (idempotent retries, no
+// rewrite-after-confirm).
+//
+// The previous public GET /api/fartak/brief?briefId= has been REMOVED: the
+// frontend never used it, and no public read of brief data by id exists.
 
 import { NextRequest, NextResponse } from "next/server";
-import { rateLimit, clientKey } from "../../../../server/fartak/rateLimit";
-import { getBrief, updateBrief } from "../../../../server/fartak/storage";
-import type { ProjectBriefEdits } from "../../../../lib/fartak/types";
+import { rateLimit, rateKey } from "../../../../server/fartak/rateLimit";
+import {
+  resolveAnonymousSession,
+  attachSessionCookie,
+  isTrustedOrigin,
+  type AnonymousSession,
+} from "../../../../server/fartak/session";
+import {
+  ApiError,
+  MAX_BODY_BYTES,
+  readJsonBody,
+  clientString,
+  sanitizeBriefEdits,
+} from "../../../../server/fartak/validation";
+import { getConversationForOwner, getBrief } from "../../../../server/fartak/storage";
+import { confirmProjectBrief } from "../../../../server/fartak/briefLifecycle";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  let session: AnonymousSession | null = null;
+  const respond = (payload: Record<string, unknown>, status = 200) => {
+    const res = NextResponse.json(payload, { status });
+    if (session) attachSessionCookie(res, session);
+    return res;
+  };
+
   try {
-    if (!rateLimit(`brief:${clientKey(req.headers)}`)) {
-      return NextResponse.json({ error: "Rate limit exceeded. Please slow down." }, { status: 429 });
+    if (!isTrustedOrigin(req)) return respond({ error: "Invalid request origin" }, 403);
+
+    session = resolveAnonymousSession(req);
+    if (!rateLimit(`brief:${rateKey(req)}`)) {
+      return respond({ error: "Rate limit exceeded. Please slow down." }, 429);
     }
 
-    const body = await req.json().catch(() => ({}));
-    const briefId = (body.briefId || "").toString().trim().slice(0, 100);
-    const briefUpdates = body.briefUpdates as ProjectBriefEdits | null | undefined;
+    const body = await readJsonBody(req, MAX_BODY_BYTES.brief);
+    const briefId = clientString(body.briefId, 100);
+    const clientConversationId = clientString(body.conversationId, 100);
+    if (!briefId) return respond({ error: "Missing brief" }, 400);
 
-    if (!briefId) return NextResponse.json({ error: "Missing brief" }, { status: 400 });
+    // Load → relate → verify ownership: brief → conversation → session.
+    const brief = await getBrief(briefId);
+    if (!brief) return respond({ error: "Brief not found" }, 404);
+    // If the client also names a conversation, it must be the brief's real
+    // conversation — a mismatched pair is rejected, never silently attached.
+    if (clientConversationId && clientConversationId !== brief.conversation_id) {
+      return respond({ error: "Brief not found" }, 404);
+    }
+    const conversation = await getConversationForOwner(brief.conversation_id, session.hash);
+    if (!conversation) return respond({ error: "Brief not found" }, 404);
 
-    // Apply the visitor's edits and mark the brief confirmed.
-    const brief = await updateBrief(
-      briefId,
-      briefUpdates && typeof briefUpdates === "object" ? briefUpdates : {},
-      true
-    );
+    // Lifecycle gates before confirmation (server-authoritative):
+    //  • locked briefs are immutable (409)
+    //  • completed conversations accept no new confirmations, but an
+    //    unchanged confirmed brief stays idempotent (Phase 1 behavior)
+    if (brief.status === "locked") {
+      return respond({ error: "Project brief is locked" }, 409);
+    }
+    const hasEdits = Object.keys(sanitizeBriefEdits(body.briefUpdates)).length > 0;
+    if (conversation.status === "completed" && (brief.status !== "confirmed" || hasEdits)) {
+      return respond({ error: "Conversation already completed" }, 409);
+    }
 
-    if (!brief) return NextResponse.json({ error: "Brief not found" }, { status: 404 });
+    // confirmProjectBrief() applies pending edits FIRST (content changes
+    // invalidate a previous confirmation and require this re-confirmation),
+    // validates readiness, then performs the draft/review → confirmed
+    // transition with a server-generated confirmedAt. Repeating the same
+    // confirmation is idempotent. Client `status`/`confirmedAt` are never read.
+    const confirmed = await confirmProjectBrief(conversation.id, body.briefUpdates);
 
-    return NextResponse.json({ ok: true, brief });
+    return respond({ ok: true, brief: confirmed });
   } catch (error) {
+    if (error instanceof ApiError) return respond({ error: error.userMessage }, error.status);
     console.error("[fartak/brief]", error);
-    const msg = error instanceof Error ? error.message : "Brief confirmation error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return respond({ error: "Something went wrong" }, 500);
   }
-}
-
-export async function GET(req: NextRequest) {
-  // Read-only lookup (host CRM/tooling): GET /api/fartak/brief?briefId=...
-  const briefId = new URL(req.url).searchParams.get("briefId") || "";
-  if (!briefId) return NextResponse.json({ error: "Missing briefId" }, { status: 400 });
-  const brief = await getBrief(briefId);
-  if (!brief) return NextResponse.json({ error: "Brief not found" }, { status: 404 });
-  return NextResponse.json({ ok: true, brief });
 }

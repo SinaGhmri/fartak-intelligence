@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "types": ["node"]
+  },
+  "include": [
+    "fartak-intelligence/app/**/*.ts",
+    "fartak-intelligence/components/**/*.ts",
+    "fartak-intelligence/components/**/*.tsx",
+    "fartak-intelligence/hooks/**/*.ts",
+    "fartak-intelligence/lib/**/*.ts",
+    "fartak-intelligence/server/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": ["node_modules", "fartak-intelligence/.next"]
+}

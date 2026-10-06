@@ -141,9 +141,9 @@ npx prisma migrate deploy                           # production
 
 | Route | Method | Purpose | Auth | LLM |
 |---|---|---|---|---|
-| `/api/fartak/chat` | POST | Conversation engine (rate-limited 20/min/IP, ≤2000-char messages) | Public, guest-first | ≤4 calls/turn |
-| `/api/fartak/brief` | POST (+ GET `?briefId=`) | Explicit brief confirmation (applies edits, marks confirmed) | Public, rate-limited | No |
-| `/api/fartak/lead` | POST | Project handoff (validates contact, AI summary, FTK reference, creates Lead) | Public, rate-limited | 1 optional call |
+| `/api/fartak/chat` | POST | Conversation engine (session-scoped ownership, rate-limited, ≤2000-char messages) | Anonymous session cookie (HttpOnly), guest-first | ≤4 calls/turn |
+| `/api/fartak/brief` | POST | Explicit brief confirmation (ownership-checked, applies sanitized edits, server sets `status`/`confirmedAt`). Public GET removed. | Anonymous session → conversation → brief chain | No |
+| `/api/fartak/lead` | POST | Project handoff (ownership + confirmed-brief gate, contact validation, idempotent single Lead, server-generated FTK reference) | Anonymous session chain, `Lead.conversationId @unique` | 1 optional call |
 
 ---
 
@@ -193,9 +193,14 @@ missingCritical / missingOptional — never a numeric score).
 3. Knowledge base is mostly placeholder (9/14 prototype entries; module table
    empty until seeded) — the AI honestly reports "not available" rather than
    inventing facts.
-4. Rate limiting is per-instance, in-memory (serverless instances reset it).
-5. API routes are unauthenticated by design (guest-first); `GET /api/fartak/brief`
-   is a public read endpoint.
+4. Rate limiting is per-instance, in-memory (serverless instances reset it);
+   keys combine the anonymous-session hash with the client IP. Suitable for
+   development/single-instance — move to shared infrastructure (Redis/Upstash)
+   for multi-instance production.
+5. API routes are guest-first (no login) but no longer unauthenticated in the
+   insecure sense: every Conversation/Brief/Lead is owned by a cryptographically
+   random HttpOnly session cookie (SHA-256 hash stored server-side). The former
+   `GET /api/fartak/brief` public read endpoint has been removed.
 6. No email/notification on handoff — leads are only stored; consume
    `onLeadSubmitted` or query the DB.
 7. FTK reference: 4-digit random (9,000 space) with retry + timestamp fallback;

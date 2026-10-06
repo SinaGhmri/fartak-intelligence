@@ -24,6 +24,12 @@ export interface LeadRequest {
   preferredContactMethod: string;
   briefId?: string | null;
   briefUpdates?: ProjectBriefEdits | null;
+  /**
+   * Optional duplicate-request key (sent as X-Fartak-Idempotency-Key).
+   * Duplicate protection only — never authentication; the anonymous
+   * ownership session travels automatically in the HttpOnly cookie.
+   */
+  idempotencyKey?: string | null;
 }
 
 export interface BriefConfirmRequest {
@@ -32,11 +38,15 @@ export interface BriefConfirmRequest {
   briefUpdates?: ProjectBriefEdits | null;
 }
 
-async function post<T>(url: string, body: unknown): Promise<T> {
+async function post<T>(url: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
+    // The server mints an HttpOnly anonymous-session cookie on the first
+    // request; same-origin fetch includes it automatically. No token is ever
+    // handled by application code or exposed to components.
+    credentials: "same-origin",
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -56,5 +66,7 @@ export function fartakConfirmBrief(payload: BriefConfirmRequest): Promise<BriefC
 }
 
 export function fartakLead(payload: LeadRequest): Promise<LeadResponse> {
-  return post<LeadResponse>(FARTAK_CONFIG.leadEndpoint, payload);
+  const headers: Record<string, string> = {};
+  if (payload.idempotencyKey) headers["X-Fartak-Idempotency-Key"] = payload.idempotencyKey;
+  return post<LeadResponse>(FARTAK_CONFIG.leadEndpoint, payload, headers);
 }

@@ -174,13 +174,12 @@ export async function runAgentLoop(params: {
       continue;
     }
 
-    // 4) Create project brief.
+    // 4) Create/update project brief (idempotent — one authoritative brief).
     if (briefIsMeaningful(parsed.brief)) {
       actionTaken = true;
       const { brief: created } = await createProjectBrief(
         parsed.brief as Record<string, unknown>,
-        conversationId,
-        readiness
+        conversationId
       );
       actions.push({ type: "project_brief", brief: created });
       brief = created;

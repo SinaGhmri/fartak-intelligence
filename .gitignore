@@ -1,0 +1,12 @@
+# Development-harness artifacts (the portable module itself has no dependencies here)
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+fartak-intelligence/.next/
+fartak-intelligence/tsconfig.json
+fartak-intelligence/next-env.d.ts
+
+# Never commit environment files (only .env.example is tracked)
+.env
+.env.*
+!.env.example
