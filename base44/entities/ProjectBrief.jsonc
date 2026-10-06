@@ -1,0 +1,90 @@
+{
+  "name": "ProjectBrief",
+  "type": "object",
+  "properties": {
+    "conversation_id": {
+      "type": "string"
+    },
+    "project_name": {
+      "type": "string"
+    },
+    "problem": {
+      "type": "string",
+      "description": "Business problem the project solves"
+    },
+    "goal": {
+      "type": "string",
+      "description": "Desired outcome / core idea"
+    },
+    "target_users": {
+      "type": "string"
+    },
+    "user_roles": {
+      "type": "string",
+      "description": "Roles different users will have in the product"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "workflows": {
+      "type": "string",
+      "description": "Main workflows the user described"
+    },
+    "ai_requirements": {
+      "type": "string"
+    },
+    "integrations": {
+      "type": "string",
+      "description": "Existing systems the project must integrate with"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "mvp_scope": {
+      "type": "string",
+      "description": "What is in scope for the first version"
+    },
+    "future_scope": {
+      "type": "string",
+      "description": "Features intentionally postponed to later versions"
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Reasonable interpretations that are NOT confirmed by the visitor \u2014 never presented as facts"
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Material questions still unresolved when the brief was generated"
+    },
+    "timeline": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "confirmed"
+      ],
+      "default": "draft"
+    }
+  },
+  "required": [
+    "conversation_id",
+    "project_name"
+  ]
+}

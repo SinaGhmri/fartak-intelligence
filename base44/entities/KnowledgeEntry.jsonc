@@ -1,0 +1,47 @@
+{
+  "name": "KnowledgeEntry",
+  "type": "object",
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": [
+        "company",
+        "services",
+        "projects",
+        "technologies",
+        "process",
+        "faq"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source": {
+      "type": "string",
+      "description": "Origin of the content (e.g. company.md, manual)"
+    },
+    "is_placeholder": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when verified company content is not yet available \u2014 the AI must not present placeholder text as real company facts"
+    },
+    "ref_id": {
+      "type": "string",
+      "description": "Stable slug used by tools (show_project/show_service) to look up an entry"
+    }
+  },
+  "required": [
+    "category",
+    "title",
+    "content"
+  ]
+}

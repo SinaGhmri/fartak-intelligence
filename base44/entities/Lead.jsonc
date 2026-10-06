@@ -1,0 +1,42 @@
+{
+  "name": "Lead",
+  "type": "object",
+  "properties": {
+    "conversation_id": {
+      "type": "string"
+    },
+    "project_brief_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "phone": {
+      "type": "string"
+    },
+    "company": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "new",
+        "contacted",
+        "qualified",
+        "archived"
+      ],
+      "default": "new"
+    }
+  },
+  "required": [
+    "conversation_id",
+    "name",
+    "email"
+  ]
+}

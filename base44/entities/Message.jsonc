@@ -1,0 +1,41 @@
+{
+  "name": "Message",
+  "type": "object",
+  "properties": {
+    "conversation_id": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant",
+        "system",
+        "tool"
+      ]
+    },
+    "content": {
+      "type": "string"
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "tool_args": {
+      "type": "string",
+      "description": "JSON-stringified tool arguments (traceability only)"
+    },
+    "tool_result": {
+      "type": "string",
+      "description": "JSON-stringified tool result (traceability only)"
+    },
+    "cards": {
+      "type": "string",
+      "description": "JSON-stringified UI actions attached to an assistant message (traceability only)"
+    }
+  },
+  "required": [
+    "conversation_id",
+    "role",
+    "content"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "Conversation",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "completed",
+        "abandoned"
+      ],
+      "default": "active"
+    },
+    "intent": {
+      "type": "string",
+      "description": "Selected entry intent id (ai_product, web_app, mobile_app, automation, idea)"
+    },
+    "title": {
+      "type": "string",
+      "description": "Short label derived from the first user message"
+    },
+    "message_count": {
+      "type": "number",
+      "default": 0
+    },
+    "brief_id": {
+      "type": "string"
+    },
+    "lead_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status"
+  ]
+}

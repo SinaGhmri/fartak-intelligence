@@ -1,0 +1,95 @@
+// Database schema for the Fartak Intelligence module (Prisma).
+// Run `npx prisma migrate dev` in the host project after copying.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // or "sqlite" for local prototyping
+  url      = env("DATABASE_URL")
+}
+
+model Conversation {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  status       String   @default("active") // active | completed | abandoned
+  intent       String?
+  title        String?
+  messageCount Int      @default(0)
+  summary      String? // AI-generated conversation summary for the handoff
+  briefId      String? // latest ProjectBrief id (scalar pointer)
+  leadId       String? // latest Lead id (scalar pointer)
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  conversationId String
+  role           String // user | assistant | tool
+  content        String
+  toolName       String? // traceability for agent tool calls
+  toolArgs       String? // JSON-stringified tool arguments
+  toolResult     String? // JSON-stringified tool results
+  cards          String? // JSON-stringified UI actions attached to the message
+}
+
+model KnowledgeEntry {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  category      String // company | services | projects | technologies | process | faq
+  title         String
+  content       String
+  tags          String[] @default([])
+  source        String?
+  refId         String? @unique // stable slug used by show_project / show_service
+  isPlaceholder Boolean  @default(false)
+}
+
+model ProjectBrief {
+  id              String    @id @default(cuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  conversationId  String
+  projectName     String?
+  projectType     String?
+  problem         String?
+  goal            String? // desired outcome / proposed solution
+  targetUsers     String?
+  userRoles       String?
+  platform        String?
+  features        String[]  @default([])
+  workflows       String?
+  aiRequirements  String?
+  integrations    String?
+  constraints     String?
+  mvpScope        String?
+  futureScope     String?
+  assumptions     String[]  @default([])
+  openQuestions   String[]  @default([])
+  timeline        String?
+  budget          String?
+  geographicScope String?
+  languages       String?
+  securityPrivacy String?
+  additionalNotes String?
+  readiness       String? // JSON-stringified internal readiness evaluation
+  status          String    @default("draft") // draft | confirmed
+  confirmedAt     DateTime?
+}
+
+model Lead {
+  id                    String   @id @default(cuid())
+  createdAt             DateTime @default(now())
+  conversationId        String
+  projectBriefId        String?
+  projectReference      String   @unique // human-readable handoff reference, e.g. FTK-2048
+  name                  String
+  phone                 String
+  email                 String?
+  preferredContactMethod String // phone | whatsapp | telegram | email
+  company               String?
+  message               String?
+  status                String   @default("new") // new | contacted | qualified | archived
+}
