@@ -304,13 +304,29 @@ export async function applyProjectBriefUpdate(params: {
       // First brief of this conversation: insert + pointer in ONE transaction.
       // ProjectBrief.conversationId @unique arbitrates creation races — the
       // loser hits P2002, rolls back, and retries into the update path.
-      const readiness = evaluateBriefReadiness(clean);
+      //
+      // The FIRST stored brief is reconciled before insert (§13/§18): against
+      // an empty base every populated field counts as newly known, so
+      // duplicate items are deduped and an assumption/question already
+      // answered by a structured field never enters the database.
+      const empty: ProjectBrief = {
+        id: "",
+        conversation_id: params.conversationId,
+        features: [],
+        assumptions: [],
+        open_questions: [],
+        status: BRIEF_STATUS.DRAFT,
+      };
+      const merged: ProjectBrief = { ...empty, ...clean };
+      const { assumptions, openQuestions } = reconcileCollections(empty, merged);
+      const initial: ProjectBriefEdits = { ...clean, assumptions, open_questions: openQuestions };
+      const readiness = evaluateBriefReadiness({ ...merged, assumptions, open_questions: openQuestions });
       try {
         return await prisma.$transaction(async (tx) => {
           const created = await insertBriefRow(
             {
               conversationId: params.conversationId,
-              edits: clean,
+              edits: initial,
               status: readiness.ready ? BRIEF_STATUS.REVIEW : BRIEF_STATUS.DRAFT,
               readiness: JSON.stringify(readiness),
             },

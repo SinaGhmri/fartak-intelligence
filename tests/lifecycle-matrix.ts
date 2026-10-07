@@ -398,6 +398,43 @@ await test("L20 — lead cannot use an unrelated brief", async () => {
   expect((await prisma.lead.count({ where: { conversationId: a.conversationId } })) === 0, "no lead created");
 });
 
+// Test L21 — duplicate open questions/assumptions are deduplicated (§18):
+// the same question may never appear twice, in any casing/punctuation variant,
+// and re-submitting it in a later update must not re-introduce a copy.
+await test("L21 — duplicate questions and assumptions are removed", async () => {
+  const v = newVisitor();
+  const { conversationId } = await newConversation(v, "Duplicates everywhere.", {
+    ...READY_PAYLOAD,
+    assumptions: ["Budget TBD", "budget tbd", "Budget TBD?"],
+    open_questions: ["Which timeline?", "which timeline"],
+  });
+  const norm = (s: string) =>
+    s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+
+  const row = await prisma.projectBrief.findUnique({ where: { conversationId } });
+  expect(row, "brief missing");
+  expect(
+    row!.openQuestions.length === 1,
+    `duplicate questions kept: ${JSON.stringify(row!.openQuestions)}`
+  );
+  expect(
+    row!.assumptions.length === 1,
+    `duplicate assumptions kept: ${JSON.stringify(row!.assumptions)}`
+  );
+
+  // A later update repeating an existing question must not create a second copy.
+  await applyProjectBriefUpdate({
+    conversationId,
+    edits: { open_questions: ["Which timeline?", "Which platform?"] },
+  });
+  const after = await prisma.projectBrief.findUnique({ where: { conversationId } });
+  expect(
+    after!.openQuestions.filter((q) => norm(q) === "which timeline").length === 1,
+    `repeated question re-introduced: ${JSON.stringify(after!.openQuestions)}`
+  );
+  expect(after!.openQuestions.length === 2, `unexpected questions: ${JSON.stringify(after!.openQuestions)}`);
+});
+
 // ── concurrency matrix (spec §22, tests A–E) ─────────────────────────────────
 
 // Test A — two simultaneous FIRST brief creations → one brief, one pointer.
